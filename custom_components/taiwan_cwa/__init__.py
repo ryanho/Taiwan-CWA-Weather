@@ -15,12 +15,24 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     CITY_SLUGS,
+    CITY_STATIONS,
     CONF_API_KEY,
     CONF_CITIES,
     CONF_SCAN_INTERVAL,
     CWA_API_URL,
+    CWA_OBS_API_URL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    OBS_HUMIDITY,
+    OBS_PRECIPITATION,
+    OBS_PRESSURE,
+    OBS_TEMPERATURE,
+    OBS_TODAY_HIGH,
+    OBS_TODAY_LOW,
+    OBS_WEATHER,
+    OBS_WIND_DIRECTION,
+    OBS_WIND_SPEED,
+    OBSERVATION_SCAN_INTERVAL,
     async_get_cwa_ssl_context,
 )
 
@@ -44,7 +56,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_config_entry_first_refresh()
         coordinators[city] = coordinator
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinators
+    observation = CWAObservationCoordinator(hass, api_key=api_key, cities=cities)
+    await observation.async_config_entry_first_refresh()
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "forecast": coordinators,
+        "observation": observation,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -78,7 +96,61 @@ def _async_cleanup_stale_devices(
             dev_reg.async_remove_device(device.id)
 
 
+async def _async_fetch_cwa(hass: HomeAssistant, url: str, params: dict) -> dict:
+    """GET a CWA datastore endpoint and return its decoded JSON body."""
+    session = async_get_clientsession(hass)
+    ssl_context = await async_get_cwa_ssl_context(hass)
+    try:
+        async with async_timeout.timeout(30):
+            async with session.get(url, params=params, ssl=ssl_context) as resp:
+                if resp.status != 200:
+                    raise UpdateFailed(f"CWA API returned {resp.status}")
+                # CWA serves JSON as application/octet-stream, so skip
+                # aiohttp's content-type check with content_type=None.
+                return await resp.json(content_type=None)
+    except (aiohttp.ClientError, TimeoutError) as err:
+        raise UpdateFailed(f"CWA API request failed: {err}") from err
+
+
+def _obs_number(value) -> float | None:
+    """Convert an observation value, mapping CWA's -99/-999 sentinels to None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number <= -98 else number
+
+
+def _obs_text(value) -> str | None:
+    if value in (None, "", "-99", "-999", "X"):
+        return None
+    return value
+
+
+def _parse_station(station: dict) -> dict:
+    elements = station.get("WeatherElement", {})
+    extreme = elements.get("DailyExtreme", {})
+    high = extreme.get("DailyHigh", {}).get("TemperatureInfo", {})
+    low = extreme.get("DailyLow", {}).get("TemperatureInfo", {})
+    return {
+        "station_id": station.get("StationId"),
+        "station_name": station.get("StationName"),
+        "observation_time": station.get("ObsTime", {}).get("DateTime"),
+        OBS_WEATHER: _obs_text(elements.get("Weather")),
+        OBS_TEMPERATURE: _obs_number(elements.get("AirTemperature")),
+        OBS_HUMIDITY: _obs_number(elements.get("RelativeHumidity")),
+        OBS_PRESSURE: _obs_number(elements.get("AirPressure")),
+        OBS_WIND_SPEED: _obs_number(elements.get("WindSpeed")),
+        OBS_WIND_DIRECTION: _obs_number(elements.get("WindDirection")),
+        OBS_PRECIPITATION: _obs_number(elements.get("Now", {}).get("Precipitation")),
+        OBS_TODAY_HIGH: _obs_number(high.get("AirTemperature")),
+        OBS_TODAY_LOW: _obs_number(low.get("AirTemperature")),
+    }
+
+
 class CWAWeatherCoordinator(DataUpdateCoordinator):
+    """Polls the F-C0032-001 36-hour forecast for one city."""
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -101,29 +173,73 @@ class CWAWeatherCoordinator(DataUpdateCoordinator):
             "locationName": self.city,
             "format": "JSON",
         }
-        session = async_get_clientsession(self.hass)
-        ssl_context = await async_get_cwa_ssl_context(self.hass)
-        try:
-            async with async_timeout.timeout(30):
-                async with session.get(
-                    CWA_API_URL, params=params, ssl=ssl_context
-                ) as resp:
-                    if resp.status != 200:
-                        raise UpdateFailed(f"CWA API returned {resp.status}")
-                    # CWA serves JSON as application/octet-stream, so skip
-                    # aiohttp's content-type check with content_type=None.
-                    data = await resp.json(content_type=None)
-        except aiohttp.ClientError as err:
-            raise UpdateFailed(f"CWA API request failed: {err}") from err
+        data = await _async_fetch_cwa(self.hass, CWA_API_URL, params)
 
         try:
             location = data["records"]["location"][0]
-            elements = location["weatherElement"]
+            # Element order differs between the REST API and the file
+            # download, so look elements up by name rather than position.
+            elements = {
+                element["elementName"]: element["time"][0]["parameter"]["parameterName"]
+                for element in location["weatherElement"]
+            }
             return {
-                "weather": elements[0]["time"][0]["parameter"]["parameterName"],
-                "rain_prob": elements[1]["time"][0]["parameter"]["parameterName"],
-                "min_temp": elements[2]["time"][0]["parameter"]["parameterName"],
-                "max_temp": elements[4]["time"][0]["parameter"]["parameterName"],
+                "weather": elements["Wx"],
+                "rain_prob": elements["PoP"],
+                "min_temp": elements["MinT"],
+                "max_temp": elements["MaxT"],
             }
         except (KeyError, IndexError) as err:
             raise UpdateFailed(f"Unexpected CWA API response structure: {err}") from err
+
+
+class CWAObservationCoordinator(DataUpdateCoordinator):
+    """Polls O-A0001-001 current observations for all configured cities.
+
+    One request covers every city: the stations are passed as a
+    comma-separated StationId list. Data is keyed by city name; a city whose
+    stations are all missing from the response is simply absent.
+    """
+
+    def __init__(self, hass: HomeAssistant, api_key: str, cities: list[str]) -> None:
+        self.api_key = api_key
+        self.cities = cities
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_observation",
+            update_interval=timedelta(seconds=OBSERVATION_SCAN_INTERVAL),
+        )
+
+    async def _async_update_data(self) -> dict[str, dict]:
+        station_ids = sorted(
+            {sid for city in self.cities for sid in CITY_STATIONS.get(city, [])}
+        )
+        if not station_ids:
+            return {}
+        params = {
+            "Authorization": self.api_key,
+            "StationId": ",".join(station_ids),
+            "format": "JSON",
+        }
+        data = await _async_fetch_cwa(self.hass, CWA_OBS_API_URL, params)
+
+        try:
+            stations = data["records"]["Station"]
+        except (KeyError, TypeError) as err:
+            raise UpdateFailed(f"Unexpected CWA API response structure: {err}") from err
+        # The API does not return stations in the requested order.
+        by_id = {s.get("StationId"): _parse_station(s) for s in stations}
+
+        result: dict[str, dict] = {}
+        for city in self.cities:
+            candidates = [by_id[sid] for sid in CITY_STATIONS.get(city, []) if sid in by_id]
+            if not candidates:
+                _LOGGER.debug("No observation station reported for %s", city)
+                continue
+            # Prefer the first station that is actually reporting temperature.
+            result[city] = next(
+                (c for c in candidates if c[OBS_TEMPERATURE] is not None),
+                candidates[0],
+            )
+        return result

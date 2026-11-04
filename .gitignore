@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+# Raw CWA dataset samples
+/F-C0032-001.json
+/O-A0001-001.json

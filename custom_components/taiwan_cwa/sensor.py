@@ -1,14 +1,107 @@
 """Taiwan CWA Weather sensors."""
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from dataclasses import dataclass
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.const import (
+    DEGREE,
+    PERCENTAGE,
+    UnitOfPrecipitationDepth,
+    UnitOfPressure,
+    UnitOfSpeed,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CITY_SLUGS, CONF_CITIES, DOMAIN
+from .const import (
+    CITY_SLUGS,
+    DOMAIN,
+    OBS_HUMIDITY,
+    OBS_PRECIPITATION,
+    OBS_PRESSURE,
+    OBS_TEMPERATURE,
+    OBS_TODAY_HIGH,
+    OBS_TODAY_LOW,
+    OBS_WEATHER,
+    OBS_WIND_DIRECTION,
+    OBS_WIND_SPEED,
+)
+
+
+@dataclass(frozen=True)
+class ObservationSensorSpec:
+    key: str
+    name: str
+    icon: str | None = None
+    unit: str | None = None
+    device_class: SensorDeviceClass | None = None
+    state_class: SensorStateClass | None = None
+
+
+OBSERVATION_SENSORS = (
+    ObservationSensorSpec(OBS_WEATHER, "Current Weather", icon="mdi:weather-partly-cloudy"),
+    ObservationSensorSpec(
+        OBS_TEMPERATURE,
+        "Temperature",
+        unit=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    ObservationSensorSpec(
+        OBS_HUMIDITY,
+        "Humidity",
+        unit=PERCENTAGE,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    ObservationSensorSpec(
+        OBS_PRESSURE,
+        "Pressure",
+        unit=UnitOfPressure.HPA,
+        device_class=SensorDeviceClass.ATMOSPHERIC_PRESSURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    ObservationSensorSpec(
+        OBS_WIND_SPEED,
+        "Wind Speed",
+        unit=UnitOfSpeed.METERS_PER_SECOND,
+        device_class=SensorDeviceClass.WIND_SPEED,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    ObservationSensorSpec(
+        OBS_WIND_DIRECTION, "Wind Direction", icon="mdi:compass-outline", unit=DEGREE
+    ),
+    # Accumulated since local midnight, so it resets daily.
+    ObservationSensorSpec(
+        OBS_PRECIPITATION,
+        "Precipitation Today",
+        unit=UnitOfPrecipitationDepth.MILLIMETERS,
+        device_class=SensorDeviceClass.PRECIPITATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    ObservationSensorSpec(
+        OBS_TODAY_HIGH,
+        "Today High",
+        icon="mdi:thermometer-chevron-up",
+        unit=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+    ),
+    ObservationSensorSpec(
+        OBS_TODAY_LOW,
+        "Today Low",
+        icon="mdi:thermometer-chevron-down",
+        unit=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+    ),
+)
 
 
 async def async_setup_entry(
@@ -16,7 +109,9 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinators: dict = hass.data[DOMAIN][entry.entry_id]
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinators: dict = data["forecast"]
+    observation = data["observation"]
     entities = []
     for city, coordinator in coordinators.items():
         slug = CITY_SLUGS.get(city, city)
@@ -27,6 +122,10 @@ async def async_setup_entry(
                 CWAMinTempSensor(coordinator, entry, city, slug),
                 CWAMaxTempSensor(coordinator, entry, city, slug),
             ]
+        )
+        entities.extend(
+            CWAObservationSensor(observation, entry, city, slug, spec)
+            for spec in OBSERVATION_SENSORS
         )
     async_add_entities(entities)
 
@@ -45,7 +144,7 @@ class CWABaseSensor(CoordinatorEntity, SensorEntity):
             "identifiers": {(DOMAIN, f"{self._entry.entry_id}_{self._slug}")},
             "name": f"Taiwan CWA Weather {self._city}",
             "manufacturer": "Central Weather Administration",
-            "model": "F-C0032-001",
+            "model": "F-C0032-001 / O-A0001-001",
         }
 
     @property
@@ -129,3 +228,38 @@ class CWAMaxTempSensor(CWABaseSensor):
             return float(val)
         except (TypeError, ValueError):
             return None
+
+
+class CWAObservationSensor(CWABaseSensor):
+    """A current-conditions value from the city's O-A0001-001 station."""
+
+    def __init__(self, coordinator, entry, city, slug, spec: ObservationSensorSpec):
+        super().__init__(coordinator, entry, city, slug, spec.key)
+        self._attr_unique_id = f"{entry.entry_id}_{slug}_{spec.key}"
+        self._attr_name = f"Taiwan CWA {city} {spec.name}"
+        self.entity_id = f"sensor.taiwan_cwa_{slug}_{spec.key}"
+        self._attr_icon = spec.icon
+        self._attr_native_unit_of_measurement = spec.unit
+        self._attr_device_class = spec.device_class
+        self._attr_state_class = spec.state_class
+
+    @property
+    def _station(self) -> dict | None:
+        return self._data.get(self._city)
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._station is not None
+
+    @property
+    def native_value(self):
+        return (self._station or {}).get(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        station = self._station or {}
+        return {
+            "station_id": station.get("station_id"),
+            "station_name": station.get("station_name"),
+            "observation_time": station.get("observation_time"),
+        }

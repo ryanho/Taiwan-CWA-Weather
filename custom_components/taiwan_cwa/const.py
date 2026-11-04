@@ -13,8 +13,12 @@ CONF_SCAN_INTERVAL = "scan_interval"
 
 DEFAULT_CITY = "臺北市"
 DEFAULT_SCAN_INTERVAL = 3600
+# Stations report every 10 minutes (daily extremes update between hourly
+# observations), so poll observations more often than the 6-hourly forecast.
+OBSERVATION_SCAN_INTERVAL = 600
 
 CWA_API_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
+CWA_OBS_API_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0001-001"
 
 CITIES = [
     "臺北市",
@@ -91,6 +95,38 @@ CITY_EN_NAMES = {
     "連江縣": "Lienchiang County",
 }
 
+# O-A0001-001 observation stations per city, in order of preference.
+#
+# The API cannot filter by county, and averaging a county is meaningless
+# (stations range from sea level to 3,800 m), so each city maps to a lowland
+# station near its seat of government. Manned CWA stations (46xxxx) are
+# preferred where one is close; the second entry is used when the first is
+# missing from the response or reports no temperature.
+CITY_STATIONS = {
+    "臺北市": ["466920", "C0AC70"],  # 臺北, 信義
+    "新北市": ["466881", "C0AJ80"],  # 新北, 板橋
+    "桃園市": ["C2C480", "C0C700"],  # 桃園, 中壢
+    "臺中市": ["467490", "C0F9U0"],  # 臺中, 南屯
+    "臺南市": ["467410", "467420"],  # 臺南, 永康
+    "高雄市": ["467441", "C0V490"],  # 高雄, 新興
+    "基隆市": ["466940", "C0B060"],  # 基隆, 暖暖
+    "新竹市": ["C0D660", "467571"],  # 新竹市東區, 新竹
+    "嘉義市": ["467480", "C0M730"],  # 嘉義, 嘉義市東區
+    "新竹縣": ["467571", "C0D590"],  # 新竹(竹北), 新豐
+    "苗栗縣": ["C0E750", "467280"],  # 苗栗, 後龍
+    "彰化縣": ["C0G780", "A0G720"],  # 秀水, 彰師大
+    "南投縣": ["C0I460", "C0H960"],  # 南投, 草屯
+    "雲林縣": ["C0K400", "467290"],  # 斗六, 古坑
+    "嘉義縣": ["C0M680", "C0M650"],  # 太保, 朴子
+    "屏東縣": ["C2R170", "C0R570"],  # 屏東, 麟洛
+    "宜蘭縣": ["467080", "C0U990"],  # 宜蘭, 員山
+    "花蓮縣": ["466990", "C0TA10"],  # 花蓮, 花蓮漁港
+    "臺東縣": ["467660", "C0SB20"],  # 臺東, 富岡
+    "澎湖縣": ["467350", "C0W200"],  # 澎湖, 湖西
+    "金門縣": ["467110", "C0W150"],  # 金門, 金寧
+    "連江縣": ["467990", "C0W220"],  # 馬祖, 北竿
+}
+
 CITY_OPTIONS = [
     {"value": name, "label": f"{name} ({CITY_EN_NAMES[name]})"} for name in CITIES
 ]
@@ -99,6 +135,16 @@ SENSOR_WEATHER = "weather"
 SENSOR_RAIN_PROB = "rain_prob"
 SENSOR_MIN_TEMP = "min_temp"
 SENSOR_MAX_TEMP = "max_temp"
+
+OBS_WEATHER = "obs_weather"
+OBS_TEMPERATURE = "temperature"
+OBS_HUMIDITY = "humidity"
+OBS_PRESSURE = "pressure"
+OBS_WIND_SPEED = "wind_speed"
+OBS_WIND_DIRECTION = "wind_direction"
+OBS_PRECIPITATION = "precipitation"
+OBS_TODAY_HIGH = "today_high"
+OBS_TODAY_LOW = "today_low"
 
 # TWCA certificate chain for opendata.cwa.gov.tw.
 #

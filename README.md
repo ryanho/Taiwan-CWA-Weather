@@ -46,10 +46,11 @@ Reference: [CWA QPF documentation](https://www.cwa.gov.tw/V8/C/P/QPF.html) · [M
 
 ## Features / 功能
 
-- Current weather condition / 目前天氣狀況（例：陰短暫陣雨）
+- Forecast weather condition / 預報天氣狀況（例：陰短暫陣雨）
 - Rain probability / 降雨機率（%）
 - Max temperature / 最高溫（°C）
 - Min temperature / 最低溫（°C）
+- Live station observations, updated every 10 minutes / 測站即時觀測，每 10 分鐘更新：temperature, humidity, pressure, wind, precipitation today, today's high/low / 氣溫、濕度、氣壓、風速風向、今日累積雨量、今日最高／最低溫
 - Configurable update interval / 可自訂更新頻率
 - Supports all 22 cities/counties in Taiwan / 支援台灣全部 22 縣市
 
@@ -95,8 +96,10 @@ You will need: / 需要填入：
 
 ## Sensors / 感應器
 
-Each configured city creates four sensors. Entity IDs follow the pattern `sensor.taiwan_cwa_{city_slug}_{sensor}` — for example, Taipei (`taipei`):  
-每個設定的城市會建立四個感應器，entity ID 格式為 `sensor.taiwan_cwa_{城市 slug}_{感應器}`，以臺北市（`taipei`）為例：
+Each configured city creates 13 sensors. Entity IDs follow the pattern `sensor.taiwan_cwa_{city_slug}_{sensor}` — for example, Taipei (`taipei`):  
+每個設定的城市會建立 13 個感應器，entity ID 格式為 `sensor.taiwan_cwa_{城市 slug}_{感應器}`，以臺北市（`taipei`）為例：
+
+**Forecast (F-C0032-001) / 預報**
 
 | Entity ID | Description | 說明 |
 |---|---|---|
@@ -104,6 +107,26 @@ Each configured city creates four sensors. Entity IDs follow the pattern `sensor
 | `sensor.taiwan_cwa_taipei_rain_prob` | Rain probability (%) | 降雨機率（%） |
 | `sensor.taiwan_cwa_taipei_min_temp` | Min temperature (°C) | 最低溫（°C） |
 | `sensor.taiwan_cwa_taipei_max_temp` | Max temperature (°C) | 最高溫（°C） |
+
+**Current observation (O-A0001-001) / 即時觀測**
+
+| Entity ID | Description | 說明 |
+|---|---|---|
+| `sensor.taiwan_cwa_taipei_obs_weather` | Observed weather (sky condition) | 觀測天氣（晴／多雲／陰） |
+| `sensor.taiwan_cwa_taipei_temperature` | Temperature (°C) | 氣溫（°C） |
+| `sensor.taiwan_cwa_taipei_humidity` | Relative humidity (%) | 相對濕度（%） |
+| `sensor.taiwan_cwa_taipei_pressure` | Air pressure (hPa) | 氣壓（hPa） |
+| `sensor.taiwan_cwa_taipei_wind_speed` | Wind speed (m/s) | 風速（m/s） |
+| `sensor.taiwan_cwa_taipei_wind_direction` | Wind direction (°) | 風向（°） |
+| `sensor.taiwan_cwa_taipei_precipitation` | Precipitation since midnight (mm) | 今日累積雨量（mm） |
+| `sensor.taiwan_cwa_taipei_today_high` | Today's high (°C) | 今日最高溫（°C） |
+| `sensor.taiwan_cwa_taipei_today_low` | Today's low (°C) | 今日最低溫（°C） |
+
+Observation sensors carry `station_id`, `station_name` and `observation_time` attributes. Each city uses a lowland station near its seat of government (see `CITY_STATIONS` in `const.py`), falling back to a second nearby station if the first is not reporting.  
+觀測感應器帶有 `station_id`、`station_name`、`observation_time` 屬性。每個縣市使用縣市政府附近的平地測站（見 `const.py` 的 `CITY_STATIONS`），主站無資料時自動改用第二個鄰近測站。
+
+> The observed weather only reflects sky condition and rarely reports rain; use the precipitation sensor to tell whether it has rained today.  
+> 觀測天氣僅反映雲量，鮮少顯示降雨；是否下雨請參考今日累積雨量。
 
 <details>
 <summary>City slug reference / 城市 slug 對照</summary>
@@ -168,8 +191,8 @@ Each configured city creates four sensors. Entity IDs follow the pattern `sensor
 
 - CWA's SSL certificate is missing the Subject Key Identifier extension, which Python 3.13's strict verification rejects. This integration keeps full TLS verification (signature chain, host name, expiry and trust anchor) and only relaxes that one pedantic RFC extension check, so the API key is never sent over an unverified connection.  
   CWA 官方 API 的 SSL 憑證缺少 Subject Key Identifier，會被 Python 3.13 的嚴格驗證擋下。本整合仍完整驗證 TLS（簽章鏈、主機名稱、效期與信任根），僅放寬這一項 RFC 擴充欄位的嚴格檢查，因此 API 金鑰不會透過未驗證的連線傳送。
-- Data is sourced from the F-C0032-001 dataset (36-hour forecast).  
-  資料來源為 F-C0032-001（36小時預報）。
+- Forecast data comes from F-C0032-001 (36-hour forecast); current conditions come from O-A0001-001 (automatic weather station observations).  
+  預報資料來源為 F-C0032-001（36小時預報）；即時觀測來源為 O-A0001-001（自動氣象站觀測資料）。
 
 ---
 
