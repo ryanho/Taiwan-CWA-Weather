@@ -2,40 +2,138 @@
   "config": {
     "step": {
       "user": {
-        "title": "Taiwan CWA Weather Setup",
-        "description": "Get your free API key at [{opendata_host}]({opendata_url}). Register → Member Center → Apply for API Key.\n\n請至 [{opendata_host}]({opendata_url}) 免費申請 API Key。註冊後進入「會員中心」→「API授權碼申請」。",
+        "title": "Taiwan CWA Weather",
+        "description": "Pick the zone to provide weather for. The nearest township forecast and observation station are chosen automatically from its coordinates.\n\nGet a free API key at [{opendata_host}]({opendata_url}): register, then go to Member Center → API Key.",
         "data": {
-          "api_key": "CWA API Key",
-          "city": "Initial City",
-          "scan_interval": "Update Interval (seconds)"
+          "api_key": "CWA API key",
+          "zone": "Zone"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter API key",
+        "description": "The Central Weather Administration rejected the current API key. Enter a new one.",
+        "data": {
+          "api_key": "CWA API key"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to CWA API. Please check your network.",
-      "invalid_auth": "Invalid API key. Please verify your CWA API key.",
-      "city_not_found": "City not found in CWA data. Please select a valid city."
+      "invalid_auth": "Invalid API key.",
+      "cannot_connect": "Cannot connect to the CWA API.",
+      "zone_not_found": "The zone or its coordinates could not be found.",
+      "outside_taiwan": "This zone is outside Taiwan; CWA has no forecast for it."
     },
     "abort": {
-      "already_configured": "This API key is already configured."
+      "already_configured": "This zone is already configured.",
+      "reauth_successful": "The API key has been updated."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Manage Cities / 管理監測城市",
-        "description": "Select the cities to monitor. Each city creates 13 sensors: 4 forecast (weather, rain probability, min/max temperature) and 9 live station observations (weather, temperature, humidity, pressure, wind speed/direction, precipitation today, today's high/low). Changes take effect after reloading.\n\n⚠️ At least one city must remain selected. To remove the integration entirely, delete it from Settings → Devices & Services.\n\n勾選要監測的城市，每個城市會建立 13 個 sensor：4 個預報（天氣狀況、降雨機率、最低溫、最高溫）與 9 個測站即時觀測（天氣、氣溫、濕度、氣壓、風速、風向、今日雨量、今日最高／最低溫）。儲存後整合會自動重新載入。\n\n⚠️ 至少需保留一個城市；若要完全移除整合，請到「設定 → 裝置與服務」刪除整合。",
+        "title": "Observation station",
+        "description": "Forecast location: {township}\n\nChoose the station that provides live observations. Auto picks the nearest station at a similar altitude and falls back to a backup station when it has no data.",
         "data": {
-          "cities": "Cities / 城市"
+          "station": "Station",
+          "relocate": "Pick the township and stations again from the zone's current location"
         }
-      },
-      "confirm_remove": {
-        "title": "Confirm Removal / 確認移除",
-        "description": "⚠️ The following cities will be removed, along with their devices and sensors. This cannot be undone.\n\n以下城市將被移除，對應的裝置與 sensor 也會一併刪除。此動作無法復原。\n\n{cities}\n\nPress Submit to confirm, or go back to cancel.\n按「提交」確認，或返回取消。"
       }
     },
     "error": {
-      "no_cities": "At least one city must remain selected. To remove the integration entirely, delete it from Settings → Devices & Services. / 至少需保留一個城市；若要完全移除整合，請到「設定 → 裝置與服務」刪除整合。"
+      "cannot_connect": "Cannot connect to the CWA API.",
+      "outside_taiwan": "This zone is outside Taiwan; CWA has no forecast for it."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "temperature": {
+        "name": "Temperature"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "precipitation": {
+        "name": "Precipitation today"
+      },
+      "pressure": {
+        "name": "Pressure"
+      },
+      "wind_speed": {
+        "name": "Wind speed"
+      },
+      "wind_direction": {
+        "name": "Wind direction"
+      },
+      "today_high": {
+        "name": "Today's high"
+      },
+      "today_low": {
+        "name": "Today's low"
+      },
+      "apparent_temperature": {
+        "name": "Apparent temperature"
+      },
+      "uv_index": {
+        "name": "UV index"
+      },
+      "rain_probability": {
+        "name": "Rain probability"
+      },
+      "weather_code": {
+        "name": "Weather",
+        "state": {
+          "01": "Clear",
+          "02": "Mostly clear",
+          "03": "Partly clear",
+          "04": "Partly cloudy",
+          "05": "Mostly cloudy",
+          "06": "Mostly cloudy",
+          "07": "Cloudy",
+          "08": "Partly cloudy with occasional rain",
+          "09": "Mostly cloudy with occasional rain",
+          "10": "Mostly cloudy with occasional rain",
+          "11": "Cloudy with occasional rain",
+          "12": "Mostly cloudy with rain",
+          "13": "Mostly cloudy with rain",
+          "14": "Rainy",
+          "15": "Partly cloudy with showers or thunderstorms",
+          "16": "Mostly cloudy with showers or thunderstorms",
+          "17": "Mostly cloudy with thundershowers",
+          "18": "Cloudy with showers or thunderstorms",
+          "19": "Clear with occasional afternoon showers",
+          "20": "Partly cloudy with occasional afternoon showers",
+          "21": "Clear with afternoon thundershowers",
+          "22": "Partly cloudy with afternoon thundershowers",
+          "23": "Rain or snow",
+          "24": "Clear with fog",
+          "25": "Mostly clear with fog",
+          "26": "Partly clear with fog",
+          "27": "Partly cloudy with fog",
+          "28": "Cloudy with fog",
+          "29": "Partly cloudy with local rain",
+          "30": "Mostly cloudy with local rain",
+          "31": "Partly cloudy with fog and local rain",
+          "32": "Mostly cloudy with fog and local rain",
+          "33": "Partly cloudy with local showers or thunderstorms",
+          "34": "Mostly cloudy with local showers or thunderstorms",
+          "35": "Partly cloudy with showers or thunderstorms and fog",
+          "36": "Mostly cloudy with thundershowers and fog",
+          "37": "Rain or snow with fog",
+          "38": "Occasional showers with fog",
+          "39": "Rain with fog",
+          "41": "Occasional showers or thunderstorms with fog",
+          "42": "Snow"
+        }
+      },
+      "station": {
+        "name": "Observation station"
+      }
+    }
+  },
+  "issues": {
+    "legacy_entry": {
+      "title": "Taiwan CWA Weather needs to be set up again",
+      "description": "Version 2.0 provides weather for a zone's coordinates and cannot use the city settings from 1.x. Delete Taiwan CWA Weather under Settings → Devices & services and add it again."
     }
   }
 }

@@ -2,244 +2,142 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
-
-import aiohttp
-import async_timeout
+from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import issue_registry as ir
 
+from .api import CWAApiError, CWAAuthError
 from .const import (
-    CITY_SLUGS,
-    CITY_STATIONS,
     CONF_API_KEY,
-    CONF_CITIES,
-    CONF_SCAN_INTERVAL,
-    CWA_API_URL,
-    CWA_OBS_API_URL,
-    DEFAULT_SCAN_INTERVAL,
+    CONF_LOCATION,
+    CONF_STATION,
+    CONF_ZONE,
     DOMAIN,
-    OBS_HUMIDITY,
-    OBS_PRECIPITATION,
-    OBS_PRESSURE,
-    OBS_TEMPERATURE,
-    OBS_TODAY_HIGH,
-    OBS_TODAY_LOW,
-    OBS_WEATHER,
-    OBS_WIND_DIRECTION,
-    OBS_WIND_SPEED,
-    OBSERVATION_SCAN_INTERVAL,
-    async_get_cwa_ssl_context,
+    STATION_AUTO,
 )
+from .coordinator import CWAForecastCoordinator, CWAObservationCoordinator
+from .location import OutsideTaiwanError, async_resolve_location
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "weather"]
+
+# Re-resolve the township and stations once the zone moves this far (~1 km).
+_ZONE_MOVED_DEGREES = 0.01
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    api_key = entry.data[CONF_API_KEY]
-    scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-    cities = entry.options.get(CONF_CITIES, [])
+@dataclass
+class CWAData:
+    observation: CWAObservationCoordinator
+    forecast: CWAForecastCoordinator
 
-    _async_cleanup_stale_devices(hass, entry, cities)
 
-    coordinators: dict[str, CWAWeatherCoordinator] = {}
-    for city in cities:
-        coordinator = CWAWeatherCoordinator(
-            hass, api_key=api_key, city=city, scan_interval=scan_interval
+type CWAConfigEntry = ConfigEntry[CWAData]
+
+
+def zone_coordinates(hass: HomeAssistant, zone: str) -> tuple[float, float] | None:
+    state = hass.states.get(zone)
+    if state is None:
+        return None
+    lat, lon = state.attributes.get("latitude"), state.attributes.get("longitude")
+    if lat is None or lon is None:
+        return None
+    return float(lat), float(lon)
+
+
+def zone_elevation(hass: HomeAssistant, zone: str) -> float | None:
+    """Only the home zone has a known elevation."""
+    return float(hass.config.elevation) if zone == "zone.home" else None
+
+
+def station_ids(entry: ConfigEntry) -> list[str]:
+    """The station chain to poll: a manual choice first, then the auto picks."""
+    auto = [s["id"] for s in entry.data[CONF_LOCATION]["stations"]]
+    manual = entry.options.get(CONF_STATION, STATION_AUTO)
+    if manual != STATION_AUTO:
+        return [manual, *(sid for sid in auto if sid != manual)]
+    return auto
+
+
+async def _async_refresh_location_if_moved(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    location: dict[str, Any] = entry.data[CONF_LOCATION]
+    coords = zone_coordinates(hass, entry.data[CONF_ZONE])
+    if coords is None:
+        return
+    if (
+        abs(coords[0] - location["latitude"]) < _ZONE_MOVED_DEGREES
+        and abs(coords[1] - location["longitude"]) < _ZONE_MOVED_DEGREES
+    ):
+        return
+    _LOGGER.info("Zone %s moved; picking a new township and stations", entry.data[CONF_ZONE])
+    try:
+        new_location = await async_resolve_location(
+            hass,
+            entry.data[CONF_API_KEY],
+            *coords,
+            zone_elevation(hass, entry.data[CONF_ZONE]),
         )
-        await coordinator.async_config_entry_first_refresh()
-        coordinators[city] = coordinator
+    except CWAAuthError as err:
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except CWAApiError as err:
+        raise ConfigEntryNotReady(str(err)) from err
+    except OutsideTaiwanError:
+        _LOGGER.warning(
+            "Zone %s moved outside Taiwan; keeping the previous location",
+            entry.data[CONF_ZONE],
+        )
+        return
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_LOCATION: new_location}
+    )
 
-    observation = CWAObservationCoordinator(hass, api_key=api_key, cities=cities)
+
+async def async_setup_entry(hass: HomeAssistant, entry: CWAConfigEntry) -> bool:
+    await _async_refresh_location_if_moved(hass, entry)
+
+    api_key = entry.data[CONF_API_KEY]
+    observation = CWAObservationCoordinator(hass, entry, api_key, station_ids(entry))
+    forecast = CWAForecastCoordinator(hass, entry, api_key, entry.data[CONF_LOCATION])
     await observation.async_config_entry_first_refresh()
-
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        "forecast": coordinators,
-        "observation": observation,
-    }
+    await forecast.async_config_entry_first_refresh()
+    entry.runtime_data = CWAData(observation=observation, forecast=forecast)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-    return unload_ok
+async def async_unload_entry(hass: HomeAssistant, entry: CWAConfigEntry) -> bool:
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-def _async_cleanup_stale_devices(
-    hass: HomeAssistant, entry: ConfigEntry, cities: list[str]
-) -> None:
-    """Remove devices for cities that are no longer selected."""
-    active_identifiers = {
-        f"{entry.entry_id}_{CITY_SLUGS.get(city, city)}" for city in cities
-    }
-    dev_reg = dr.async_get(hass)
-    for device in list(dr.async_entries_for_config_entry(dev_reg, entry.entry_id)):
-        if not any(
-            domain == DOMAIN and identifier in active_identifiers
-            for domain, identifier in device.identifiers
-        ):
-            dev_reg.async_remove_device(device.id)
-
-
-async def _async_fetch_cwa(hass: HomeAssistant, url: str, params: dict) -> dict:
-    """GET a CWA datastore endpoint and return its decoded JSON body."""
-    session = async_get_clientsession(hass)
-    ssl_context = await async_get_cwa_ssl_context(hass)
-    try:
-        async with async_timeout.timeout(30):
-            async with session.get(url, params=params, ssl=ssl_context) as resp:
-                if resp.status != 200:
-                    raise UpdateFailed(f"CWA API returned {resp.status}")
-                # CWA serves JSON as application/octet-stream, so skip
-                # aiohttp's content-type check with content_type=None.
-                return await resp.json(content_type=None)
-    except (aiohttp.ClientError, TimeoutError) as err:
-        raise UpdateFailed(f"CWA API request failed: {err}") from err
-
-
-def _obs_number(value) -> float | None:
-    """Convert an observation value, mapping CWA's -99/-999 sentinels to None."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return None if number <= -98 else number
-
-
-def _obs_text(value) -> str | None:
-    if value in (None, "", "-99", "-999", "X"):
-        return None
-    return value
-
-
-def _parse_station(station: dict) -> dict:
-    elements = station.get("WeatherElement", {})
-    extreme = elements.get("DailyExtreme", {})
-    high = extreme.get("DailyHigh", {}).get("TemperatureInfo", {})
-    low = extreme.get("DailyLow", {}).get("TemperatureInfo", {})
-    return {
-        "station_id": station.get("StationId"),
-        "station_name": station.get("StationName"),
-        "observation_time": station.get("ObsTime", {}).get("DateTime"),
-        OBS_WEATHER: _obs_text(elements.get("Weather")),
-        OBS_TEMPERATURE: _obs_number(elements.get("AirTemperature")),
-        OBS_HUMIDITY: _obs_number(elements.get("RelativeHumidity")),
-        OBS_PRESSURE: _obs_number(elements.get("AirPressure")),
-        OBS_WIND_SPEED: _obs_number(elements.get("WindSpeed")),
-        OBS_WIND_DIRECTION: _obs_number(elements.get("WindDirection")),
-        OBS_PRECIPITATION: _obs_number(elements.get("Now", {}).get("Precipitation")),
-        OBS_TODAY_HIGH: _obs_number(high.get("AirTemperature")),
-        OBS_TODAY_LOW: _obs_number(low.get("AirTemperature")),
-    }
-
-
-class CWAWeatherCoordinator(DataUpdateCoordinator):
-    """Polls the F-C0032-001 36-hour forecast for one city."""
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        api_key: str,
-        city: str,
-        scan_interval: int,
-    ) -> None:
-        self.api_key = api_key
-        self.city = city
-        super().__init__(
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if entry.version == 1:
+        # 1.x configured a list of cities; 2.0 follows a zone. There is no
+        # meaningful conversion, so ask the user to set it up again.
+        ir.async_create_issue(
             hass,
-            _LOGGER,
-            name=f"{DOMAIN}_{city}",
-            update_interval=timedelta(seconds=scan_interval),
+            DOMAIN,
+            f"legacy_entry_{entry.entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="legacy_entry",
         )
-
-    async def _async_update_data(self) -> dict:
-        params = {
-            "Authorization": self.api_key,
-            "locationName": self.city,
-            "format": "JSON",
-        }
-        data = await _async_fetch_cwa(self.hass, CWA_API_URL, params)
-
-        try:
-            location = data["records"]["location"][0]
-            # Element order differs between the REST API and the file
-            # download, so look elements up by name rather than position.
-            elements = {
-                element["elementName"]: element["time"][0]["parameter"]["parameterName"]
-                for element in location["weatherElement"]
-            }
-            return {
-                "weather": elements["Wx"],
-                "rain_prob": elements["PoP"],
-                "min_temp": elements["MinT"],
-                "max_temp": elements["MaxT"],
-            }
-        except (KeyError, IndexError) as err:
-            raise UpdateFailed(f"Unexpected CWA API response structure: {err}") from err
-
-
-class CWAObservationCoordinator(DataUpdateCoordinator):
-    """Polls O-A0001-001 current observations for all configured cities.
-
-    One request covers every city: the stations are passed as a
-    comma-separated StationId list. Data is keyed by city name; a city whose
-    stations are all missing from the response is simply absent.
-    """
-
-    def __init__(self, hass: HomeAssistant, api_key: str, cities: list[str]) -> None:
-        self.api_key = api_key
-        self.cities = cities
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=f"{DOMAIN}_observation",
-            update_interval=timedelta(seconds=OBSERVATION_SCAN_INTERVAL),
+        _LOGGER.error(
+            "Taiwan CWA Weather 2.0 cannot use settings from 1.x; delete the "
+            "integration and add it again"
         )
+        return False
+    return True
 
-    async def _async_update_data(self) -> dict[str, dict]:
-        station_ids = sorted(
-            {sid for city in self.cities for sid in CITY_STATIONS.get(city, [])}
-        )
-        if not station_ids:
-            return {}
-        params = {
-            "Authorization": self.api_key,
-            "StationId": ",".join(station_ids),
-            "format": "JSON",
-        }
-        data = await _async_fetch_cwa(self.hass, CWA_OBS_API_URL, params)
 
-        try:
-            stations = data["records"]["Station"]
-        except (KeyError, TypeError) as err:
-            raise UpdateFailed(f"Unexpected CWA API response structure: {err}") from err
-        # The API does not return stations in the requested order.
-        by_id = {s.get("StationId"): _parse_station(s) for s in stations}
-
-        result: dict[str, dict] = {}
-        for city in self.cities:
-            candidates = [by_id[sid] for sid in CITY_STATIONS.get(city, []) if sid in by_id]
-            if not candidates:
-                _LOGGER.debug("No observation station reported for %s", city)
-                continue
-            # Prefer the first station that is actually reporting temperature.
-            result[city] = next(
-                (c for c in candidates if c[OBS_TEMPERATURE] is not None),
-                candidates[0],
-            )
-        return result
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    ir.async_delete_issue(hass, DOMAIN, f"legacy_entry_{entry.entry_id}")

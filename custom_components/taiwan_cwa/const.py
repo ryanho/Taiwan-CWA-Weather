@@ -2,149 +2,73 @@
 from __future__ import annotations
 
 import ssl
+from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 
 DOMAIN = "taiwan_cwa"
 CONF_API_KEY = "api_key"
-CONF_CITY = "city"
-CONF_CITIES = "cities"
-CONF_SCAN_INTERVAL = "scan_interval"
+CONF_ZONE = "zone"
+# Resolved at setup from the zone's coordinates (see location.py).
+CONF_LOCATION = "location"
+# Options: "auto" or a manually chosen O-A0001-001 StationId.
+CONF_STATION = "station"
+CONF_RELOCATE = "relocate"
+STATION_AUTO = "auto"
 
-DEFAULT_CITY = "臺北市"
-DEFAULT_SCAN_INTERVAL = 3600
-# Stations report every 10 minutes (daily extremes update between hourly
-# observations), so poll observations more often than the 6-hourly forecast.
-OBSERVATION_SCAN_INTERVAL = 600
+API_BASE_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
+OBSERVATION_DATASET = "O-A0001-001"
+# Queries several township forecast datasets at once (max 5 per request).
+MULTI_FORECAST_DATASET = "F-D0047-093"
+MULTI_FORECAST_BATCH = 5
 
-CWA_API_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001"
-CWA_OBS_API_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0001-001"
+OBSERVATION_SCAN_INTERVAL = timedelta(minutes=10)
+FORECAST_SCAN_INTERVAL = timedelta(hours=1)
+# Forecasts are issued every few hours; keep showing the last one through
+# transient API failures.
+FORECAST_VALID = timedelta(hours=12)
 
-CITIES = [
-    "臺北市",
-    "新北市",
-    "桃園市",
-    "臺中市",
-    "臺南市",
-    "高雄市",
-    "基隆市",
-    "新竹市",
-    "嘉義市",
-    "新竹縣",
-    "苗栗縣",
-    "彰化縣",
-    "南投縣",
-    "雲林縣",
-    "嘉義縣",
-    "屏東縣",
-    "宜蘭縣",
-    "花蓮縣",
-    "臺東縣",
-    "澎湖縣",
-    "金門縣",
-    "連江縣",
-]
+ATTRIBUTION = "中央氣象署 Central Weather Administration"
+TIME_ZONE = "Asia/Taipei"
 
-CITY_SLUGS = {
-    "臺北市": "taipei",
-    "新北市": "new_taipei",
-    "桃園市": "taoyuan",
-    "臺中市": "taichung",
-    "臺南市": "tainan",
-    "高雄市": "kaohsiung",
-    "基隆市": "keelung",
-    "新竹市": "hsinchu_city",
-    "嘉義市": "chiayi_city",
-    "新竹縣": "hsinchu_county",
-    "苗栗縣": "miaoli",
-    "彰化縣": "changhua",
-    "南投縣": "nantou",
-    "雲林縣": "yunlin",
-    "嘉義縣": "chiayi_county",
-    "屏東縣": "pingtung",
-    "宜蘭縣": "yilan",
-    "花蓮縣": "hualien",
-    "臺東縣": "taitung",
-    "澎湖縣": "penghu",
-    "金門縣": "kinmen",
-    "連江縣": "lienchiang",
+# Township forecast datasets per county: (3-day hourly/3-hourly, 1-week 12-hourly).
+COUNTY_FORECAST_DATASETS = {
+    "宜蘭縣": ("F-D0047-001", "F-D0047-003"),
+    "桃園市": ("F-D0047-005", "F-D0047-007"),
+    "新竹縣": ("F-D0047-009", "F-D0047-011"),
+    "苗栗縣": ("F-D0047-013", "F-D0047-015"),
+    "彰化縣": ("F-D0047-017", "F-D0047-019"),
+    "南投縣": ("F-D0047-021", "F-D0047-023"),
+    "雲林縣": ("F-D0047-025", "F-D0047-027"),
+    "嘉義縣": ("F-D0047-029", "F-D0047-031"),
+    "屏東縣": ("F-D0047-033", "F-D0047-035"),
+    "臺東縣": ("F-D0047-037", "F-D0047-039"),
+    "花蓮縣": ("F-D0047-041", "F-D0047-043"),
+    "澎湖縣": ("F-D0047-045", "F-D0047-047"),
+    "基隆市": ("F-D0047-049", "F-D0047-051"),
+    "新竹市": ("F-D0047-053", "F-D0047-055"),
+    "嘉義市": ("F-D0047-057", "F-D0047-059"),
+    "臺北市": ("F-D0047-061", "F-D0047-063"),
+    "高雄市": ("F-D0047-065", "F-D0047-067"),
+    "新北市": ("F-D0047-069", "F-D0047-071"),
+    "臺中市": ("F-D0047-073", "F-D0047-075"),
+    "臺南市": ("F-D0047-077", "F-D0047-079"),
+    "連江縣": ("F-D0047-081", "F-D0047-083"),
+    "金門縣": ("F-D0047-085", "F-D0047-087"),
 }
 
-CITY_EN_NAMES = {
-    "臺北市": "Taipei City",
-    "新北市": "New Taipei City",
-    "桃園市": "Taoyuan City",
-    "臺中市": "Taichung City",
-    "臺南市": "Tainan City",
-    "高雄市": "Kaohsiung City",
-    "基隆市": "Keelung City",
-    "新竹市": "Hsinchu City",
-    "嘉義市": "Chiayi City",
-    "新竹縣": "Hsinchu County",
-    "苗栗縣": "Miaoli County",
-    "彰化縣": "Changhua County",
-    "南投縣": "Nantou County",
-    "雲林縣": "Yunlin County",
-    "嘉義縣": "Chiayi County",
-    "屏東縣": "Pingtung County",
-    "宜蘭縣": "Yilan County",
-    "花蓮縣": "Hualien County",
-    "臺東縣": "Taitung County",
-    "澎湖縣": "Penghu County",
-    "金門縣": "Kinmen County",
-    "連江縣": "Lienchiang County",
-}
+# Location resolution rules (see location.py).
+MAX_TOWNSHIP_DISTANCE_KM = 50
+HIGHWAY_STATION_PREFIX = "CA"
+HIGHWAY_FALLBACK_RADIUS_KM = 10
+MAX_ALTITUDE_DIFFERENCE_M = 300
+AUTO_STATION_COUNT = 3
+MANUAL_STATION_CHOICES = 10
 
-# O-A0001-001 observation stations per city, in order of preference.
-#
-# The API cannot filter by county, and averaging a county is meaningless
-# (stations range from sea level to 3,800 m), so each city maps to a lowland
-# station near its seat of government. Manned CWA stations (46xxxx) are
-# preferred where one is close; the second entry is used when the first is
-# missing from the response or reports no temperature.
-CITY_STATIONS = {
-    "臺北市": ["466920", "C0AC70"],  # 臺北, 信義
-    "新北市": ["466881", "C0AJ80"],  # 新北, 板橋
-    "桃園市": ["C2C480", "C0C700"],  # 桃園, 中壢
-    "臺中市": ["467490", "C0F9U0"],  # 臺中, 南屯
-    "臺南市": ["467410", "467420"],  # 臺南, 永康
-    "高雄市": ["467441", "C0V490"],  # 高雄, 新興
-    "基隆市": ["466940", "C0B060"],  # 基隆, 暖暖
-    "新竹市": ["C0D660", "467571"],  # 新竹市東區, 新竹
-    "嘉義市": ["467480", "C0M730"],  # 嘉義, 嘉義市東區
-    "新竹縣": ["467571", "C0D590"],  # 新竹(竹北), 新豐
-    "苗栗縣": ["C0E750", "467280"],  # 苗栗, 後龍
-    "彰化縣": ["C0G780", "A0G720"],  # 秀水, 彰師大
-    "南投縣": ["C0I460", "C0H960"],  # 南投, 草屯
-    "雲林縣": ["C0K400", "467290"],  # 斗六, 古坑
-    "嘉義縣": ["C0M680", "C0M650"],  # 太保, 朴子
-    "屏東縣": ["C2R170", "C0R570"],  # 屏東, 麟洛
-    "宜蘭縣": ["467080", "C0U990"],  # 宜蘭, 員山
-    "花蓮縣": ["466990", "C0TA10"],  # 花蓮, 花蓮漁港
-    "臺東縣": ["467660", "C0SB20"],  # 臺東, 富岡
-    "澎湖縣": ["467350", "C0W200"],  # 澎湖, 湖西
-    "金門縣": ["467110", "C0W150"],  # 金門, 金寧
-    "連江縣": ["467990", "C0W220"],  # 馬祖, 北竿
-}
-
-CITY_OPTIONS = [
-    {"value": name, "label": f"{name} ({CITY_EN_NAMES[name]})"} for name in CITIES
-]
-
-SENSOR_WEATHER = "weather"
-SENSOR_RAIN_PROB = "rain_prob"
-SENSOR_MIN_TEMP = "min_temp"
-SENSOR_MAX_TEMP = "max_temp"
-
-OBS_WEATHER = "obs_weather"
-OBS_TEMPERATURE = "temperature"
-OBS_HUMIDITY = "humidity"
-OBS_PRESSURE = "pressure"
-OBS_WIND_SPEED = "wind_speed"
-OBS_WIND_DIRECTION = "wind_direction"
-OBS_PRECIPITATION = "precipitation"
-OBS_TODAY_HIGH = "today_high"
-OBS_TODAY_LOW = "today_low"
+# CWA forecast WeatherCode values, from the official 預報產品天氣描述代碼表
+# (https://www.cwa.gov.tw/V8/assets/pdf/Weather_Icon.pdf). Code 40 is unused.
+# Labels live in the translations under entity.sensor.weather_code.state.
+WEATHER_CODES = [f"{code:02d}" for code in range(1, 43) if code != 40]
 
 # TWCA certificate chain for opendata.cwa.gov.tw.
 #

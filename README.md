@@ -30,7 +30,7 @@ Key characteristics / 關鍵特性：
 - Reported in **10% increments** (10%, 20% … 90%) — you will never see 37% / 以**十分進位**呈現（10%、20%…90%），不會出現 37% 這種數字
 - Does **not** indicate duration, intensity, or spatial coverage of rain / **不代表**下雨時間長短、雨量大小或降雨範圍
 - "30% chance of rain" = 30% probability that rain occurs at all, not "rain 30% of the time" / 「降雨機率 30%」= 有下雨這件事發生的機率為 30%，而非「30% 的時間會下雨」
-- Covers a **36-hour window** broken into three 12-hour periods / 涵蓋 **36 小時**，分為三個 12 小時時段
+- Daily and twice-daily forecasts use 12-hour probabilities; the hourly forecast uses CWA's 3-hour probabilities / 每天與一天兩次的預報使用 12 小時降雨機率，每小時預報使用 3 小時降雨機率
 
 **Why different apps show different numbers / 為什麼不同 App 數字差很多：**
 1. **Different models** — CWA uses proprietary statistical models + WRF; international apps use ECMWF, GFS, or Dark Sky nowcasting / 模型不同：CWA 用自家統計＋WRF；國際 App 用 ECMWF、GFS 等
@@ -46,13 +46,11 @@ Reference: [CWA QPF documentation](https://www.cwa.gov.tw/V8/C/P/QPF.html) · [M
 
 ## Features / 功能
 
-- Forecast weather condition / 預報天氣狀況（例：陰短暫陣雨）
-- Rain probability / 降雨機率（%）
-- Max temperature / 最高溫（°C）
-- Min temperature / 最低溫（°C）
-- Live station observations, updated every 10 minutes / 測站即時觀測，每 10 分鐘更新：temperature, humidity, pressure, wind, precipitation today, today's high/low / 氣溫、濕度、氣壓、風速風向、今日累積雨量、今日最高／最低溫
-- Configurable update interval / 可自訂更新頻率
-- Supports all 22 cities/counties in Taiwan / 支援台灣全部 22 縣市
+- A weather service for a Home Assistant zone (your home by default), like Open-Meteo / 為 Home Assistant 區域（預設為首頁）提供天氣服務，使用方式與 Open-Meteo 相同
+- Current conditions from the nearest CWA observation station, updated every 10 minutes / 目前天氣取自最近的中央氣象署觀測站，每 10 分鐘更新
+- Township-level forecasts: 7-day daily, twice-daily (day/night) and hourly / 鄉鎮層級預報：7 天每日、一天兩次（白天／夜晚）與每小時
+- The nearest township and station are chosen automatically from the zone's coordinates / 依區域座標自動選擇最近的鄉鎮與測站
+- English and Traditional Chinese, following Home Assistant's language / 依 Home Assistant 語言顯示英文或繁體中文
 
 ---
 
@@ -84,106 +82,83 @@ Copy `custom_components/taiwan_cwa/` to your HA `config/custom_components/` fold
 
 ## Configuration / 設定
 
-After installation, go to **Settings → Integrations → Add Integration** and search for **Taiwan CWA Weather**.  
-安裝後前往 **設定 → 整合 → 新增整合**，搜尋 **Taiwan CWA Weather**。
+After installation, go to **Settings → Devices & services → Add integration** and search for **Taiwan CWA Weather**.  
+安裝後前往 **設定 → 裝置與服務 → 新增整合**，搜尋 **Taiwan CWA Weather**。
 
 You will need: / 需要填入：
-- **CWA API Key** — Get it free at [opendata.cwa.gov.tw](https://opendata.cwa.gov.tw/) / 免費申請
-- **City / 城市** — Select from dropdown (22 options) / 從下拉選單選擇（22 縣市）
-- **Update interval / 更新間隔** — Default 3600 seconds / 預設 3600 秒
+- **CWA API key** — get it free at [opendata.cwa.gov.tw](https://opendata.cwa.gov.tw/) / 免費申請
+- **Zone / 區域** — defaults to Home; add the integration again for other zones / 預設為首頁，其他區域可重複新增
+
+Setup finds the nearest of Taiwan's 368 forecast townships and picks up to three observation stations: the nearest ones, skipping expressway stations (`CA…`) when another station is within 10 km, and — for the home zone — stations more than 300 m higher or lower than your configured elevation. The extra stations are used when the first one is not reporting.  
+設定時會從全台 368 個預報鄉鎮中找出最近者，並挑選最多三個觀測站：依距離排序；10 公里內有其他測站時略過國道測站（`CA…`）；首頁區域另會略過與 HA 設定海拔相差超過 300 公尺的測站。第一個測站沒有資料時會改用後面的備援測站。
+
+**Options / 選項:** choose a station manually from the ten nearest, or pick the township and stations again. If the zone moves, this happens automatically on the next reload.  
+可從最近的十個測站中手動指定，或重新選擇鄉鎮與測站。區域位置變更後，下次重新載入時也會自動重新選擇。
+
+### Upgrading from 1.x / 從 1.x 升級
+
+2.0 follows a zone instead of a list of cities, so 1.x settings cannot be reused. After updating, delete Taiwan CWA Weather under Settings → Devices & services and add it again. Entity IDs change.  
+2.0 改為依區域提供天氣，無法沿用 1.x 的縣市設定。更新後請到「設定 → 裝置與服務」刪除 Taiwan CWA Weather 再重新新增，entity ID 也會改變。
 
 ---
 
-## Sensors / 感應器
+## Entities / 實體
 
-Each configured city creates 13 sensors. Entity IDs follow the pattern `sensor.taiwan_cwa_{city_slug}_{sensor}` — for example, Taipei (`taipei`):  
-每個設定的城市會建立 13 個感應器，entity ID 格式為 `sensor.taiwan_cwa_{城市 slug}_{感應器}`，以臺北市（`taipei`）為例：
+Entity IDs are based on the zone: `zone.home` → `weather.taiwan_cwa_home`, `sensor.taiwan_cwa_home_*`.  
+Entity ID 依區域命名：`zone.home` → `weather.taiwan_cwa_home`、`sensor.taiwan_cwa_home_*`。
 
-**Forecast (F-C0032-001) / 預報**
+### Weather / 天氣實體
 
-| Entity ID | Description | 說明 |
-|---|---|---|
-| `sensor.taiwan_cwa_taipei_weather` | Weather condition | 天氣狀況 |
-| `sensor.taiwan_cwa_taipei_rain_prob` | Rain probability (%) | 降雨機率（%） |
-| `sensor.taiwan_cwa_taipei_min_temp` | Min temperature (°C) | 最低溫（°C） |
-| `sensor.taiwan_cwa_taipei_max_temp` | Max temperature (°C) | 最高溫（°C） |
-
-**Current observation (O-A0001-001) / 即時觀測**
-
-| Entity ID | Description | 說明 |
-|---|---|---|
-| `sensor.taiwan_cwa_taipei_obs_weather` | Observed weather (sky condition) | 觀測天氣（晴／多雲／陰） |
-| `sensor.taiwan_cwa_taipei_temperature` | Temperature (°C) | 氣溫（°C） |
-| `sensor.taiwan_cwa_taipei_humidity` | Relative humidity (%) | 相對濕度（%） |
-| `sensor.taiwan_cwa_taipei_pressure` | Air pressure (hPa) | 氣壓（hPa） |
-| `sensor.taiwan_cwa_taipei_wind_speed` | Wind speed (m/s) | 風速（m/s） |
-| `sensor.taiwan_cwa_taipei_wind_direction` | Wind direction (°) | 風向（°） |
-| `sensor.taiwan_cwa_taipei_precipitation` | Precipitation since midnight (mm) | 今日累積雨量（mm） |
-| `sensor.taiwan_cwa_taipei_today_high` | Today's high (°C) | 今日最高溫（°C） |
-| `sensor.taiwan_cwa_taipei_today_low` | Today's low (°C) | 今日最低溫（°C） |
-
-Observation sensors carry `station_id`, `station_name` and `observation_time` attributes. Each city uses a lowland station near its seat of government (see `CITY_STATIONS` in `const.py`), falling back to a second nearby station if the first is not reporting.  
-觀測感應器帶有 `station_id`、`station_name`、`observation_time` 屬性。每個縣市使用縣市政府附近的平地測站（見 `const.py` 的 `CITY_STATIONS`），主站無資料時自動改用第二個鄰近測站。
-
-> The observed weather only reflects sky condition and rarely reports rain; use the precipitation sensor to tell whether it has rained today.  
-> 觀測天氣僅反映雲量，鮮少顯示降雨；是否下雨請參考今日累積雨量。
-
-<details>
-<summary>City slug reference / 城市 slug 對照</summary>
-
-| City / 城市 | Slug |
+| Value / 項目 | Source / 來源 |
 |---|---|
-| 臺北市 | `taipei` |
-| 新北市 | `new_taipei` |
-| 桃園市 | `taoyuan` |
-| 臺中市 | `taichung` |
-| 臺南市 | `tainan` |
-| 高雄市 | `kaohsiung` |
-| 基隆市 | `keelung` |
-| 新竹市 | `hsinchu_city` |
-| 嘉義市 | `chiayi_city` |
-| 新竹縣 | `hsinchu_county` |
-| 苗栗縣 | `miaoli` |
-| 彰化縣 | `changhua` |
-| 南投縣 | `nantou` |
-| 雲林縣 | `yunlin` |
-| 嘉義縣 | `chiayi_county` |
-| 屏東縣 | `pingtung` |
-| 宜蘭縣 | `yilan` |
-| 花蓮縣 | `hualien` |
-| 臺東縣 | `taitung` |
-| 澎湖縣 | `penghu` |
-| 金門縣 | `kinmen` |
-| 連江縣 | `lienchiang` |
+| Temperature, humidity, pressure, wind, gusts / 氣溫、濕度、氣壓、風、陣風 | Observation station / 觀測測站 |
+| Apparent temperature, dew point / 體感溫度、露點 | Hourly forecast / 每小時預報 |
+| UV index / 紫外線指數 | 12-hour forecast (daytime) / 12 小時預報（白天） |
+| Condition / 天氣狀況 | Station sky cover, or the forecast when rain or thunderstorms are forecast for the current 3 hours (stations rarely report rain) / 測站雲量；若目前 3 小時預報有雨或雷雨則改用預報（測站鮮少回報降雨） |
 
-</details>
+Forecasts / 預報:
+- **Daily / 每天** — 7 days; a day's day and night periods combined / 7 天，合併當天白天與夜晚時段
+- **Twice daily / 一天兩次** — 14 day/night periods / 14 個白天／夜晚時段
+- **Hourly / 每小時** — about 3 days; hourly at first, then every 3 hours / 約 3 天，前段每小時、之後每 3 小時
+
+If the station is unreachable, temperature, humidity and wind fall back to the hourly forecast. The more-info dialog's attribution names the station and township in use.  
+測站無法取得資料時，氣溫、濕度與風會改用每小時預報。詳細資訊視窗底部的資料來源會顯示目前使用的測站與鄉鎮。
+
+### Sensors / 感應器
+
+| Entity ID | Default | Description | 說明 |
+|---|:-:|---|---|
+| `sensor.taiwan_cwa_home_temperature` | ✅ | Temperature | 氣溫 |
+| `sensor.taiwan_cwa_home_humidity` | ✅ | Humidity | 濕度 |
+| `sensor.taiwan_cwa_home_precipitation` | ✅ | Precipitation since midnight | 今日累積雨量 |
+| `sensor.taiwan_cwa_home_station` | ✅ | Observation station (diagnostic) | 觀測測站（診斷） |
+| `sensor.taiwan_cwa_home_pressure` | | Pressure | 氣壓 |
+| `sensor.taiwan_cwa_home_wind_speed` | | Wind speed | 風速 |
+| `sensor.taiwan_cwa_home_wind_direction` | | Wind direction (°; unknown when calm or variable) | 風向（度；靜風或風向不定時為未知） |
+| `sensor.taiwan_cwa_home_today_high` | | Today's high | 今日最高溫 |
+| `sensor.taiwan_cwa_home_today_low` | | Today's low | 今日最低溫 |
+| `sensor.taiwan_cwa_home_apparent_temperature` | | Apparent temperature (forecast) | 體感溫度（預報） |
+| `sensor.taiwan_cwa_home_uv_index` | | UV index (forecast) | 紫外線指數（預報） |
+| `sensor.taiwan_cwa_home_rain_probability` | | Rain probability, current 3 hours | 降雨機率（目前 3 小時） |
+| `sensor.taiwan_cwa_home_weather_code` | | Weather, as a CWA weather code | 天氣現象（中央氣象署天氣代碼） |
+
+Sensors without ✅ are disabled by default; enable them from the entity settings.  
+未標示 ✅ 的感應器預設停用，可於實體設定中啟用。
+
+The station sensor shows the station name, with its ID, altitude, distance, observation time, whether it is a fallback, and the forecast township as attributes.  
+觀測測站感應器顯示測站名稱，屬性包含測站代碼、海拔、距離、觀測時間、是否為備援測站，以及預報鄉鎮。
+
+### Languages / 語言
+
+Entity names follow Home Assistant's system language: Traditional Chinese (`zh-Hant`), otherwise English. Weather conditions and the weather code sensor's states follow each user's own language. Station and township names are Chinese only, as CWA publishes them.  
+實體名稱依 Home Assistant 系統語言顯示：繁體中文（`zh-Hant`）顯示中文，其他語言顯示英文。天氣狀況與天氣現象感應器的狀態依各使用者的介面語言顯示。測站與鄉鎮名稱由中央氣象署提供，僅有中文。
 
 ---
 
-## Supported Cities / 支援縣市
+## Coverage / 涵蓋範圍
 
-- Taipei (臺北市)
-- New Taipei (新北市)
-- Taoyuan (桃園市)
-- Taichung (臺中市)
-- Tainan (臺南市)
-- Kaohsiung (高雄市)
-- Keelung (基隆市)
-- Hsinchu City (新竹市)
-- Hsinchu County (新竹縣)
-- Miaoli (苗栗縣)
-- Changhua (彰化縣)
-- Nantou (南投縣)
-- Yunlin (雲林縣)
-- Chiayi City (嘉義市)
-- Chiayi County (嘉義縣)
-- Pingtung (屏東縣)
-- Yilan (宜蘭縣)
-- Hualien (花蓮縣)
-- Taitung (臺東縣)
-- Penghu (澎湖縣)
-- Kinmen (金門縣)
-- Lienchiang / Matsu (連江縣)
+All of Taiwan including Penghu, Kinmen and Matsu: 22 cities and counties, 368 townships. Locations more than 50 km from any township (for example Pratas Island) are not supported.  
+台灣本島與澎湖、金門、馬祖：22 縣市、368 個鄉鎮。距離任何鄉鎮超過 50 公里的地點（例如東沙島）不支援。
 
 ---
 
@@ -191,8 +166,10 @@ Observation sensors carry `station_id`, `station_name` and `observation_time` at
 
 - CWA's SSL certificate is missing the Subject Key Identifier extension, which Python 3.13's strict verification rejects. This integration keeps full TLS verification (signature chain, host name, expiry and trust anchor) and only relaxes that one pedantic RFC extension check, so the API key is never sent over an unverified connection.  
   CWA 官方 API 的 SSL 憑證缺少 Subject Key Identifier，會被 Python 3.13 的嚴格驗證擋下。本整合仍完整驗證 TLS（簽章鏈、主機名稱、效期與信任根），僅放寬這一項 RFC 擴充欄位的嚴格檢查，因此 API 金鑰不會透過未驗證的連線傳送。
-- Forecast data comes from F-C0032-001 (36-hour forecast); current conditions come from O-A0001-001 (automatic weather station observations).  
-  預報資料來源為 F-C0032-001（36小時預報）；即時觀測來源為 O-A0001-001（自動氣象站觀測資料）。
+- Data sources: O-A0001-001 (automatic weather station observations) and the F-D0047 township forecasts (3-day and 1-week), fetched together through F-D0047-093. About seven requests are made per hour.  
+  資料來源：O-A0001-001（自動氣象站觀測資料）與 F-D0047 鄉鎮預報（未來 3 天與 1 週），透過 F-D0047-093 一次取得。每小時約發出 7 次請求。
+- Weather codes follow CWA's [weather description code table](https://www.cwa.gov.tw/V8/assets/pdf/Weather_Icon.pdf).  
+  天氣代碼依中央氣象署[預報產品天氣描述代碼表](https://www.cwa.gov.tw/V8/assets/pdf/Weather_Icon.pdf)。
 
 ---
 
