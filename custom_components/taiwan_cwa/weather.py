@@ -28,7 +28,7 @@ from .api import (
     current_entry,
     text_condition,
 )
-from .const import ATTRIBUTION, CONF_LOCATION, FORECAST_VALID
+from .const import CONF_LOCATION, FORECAST_VALID
 from .coordinator import CWAForecastCoordinator, CWAObservationCoordinator
 from .entity import object_id_prefix, service_device_info
 
@@ -146,13 +146,21 @@ class CWAWeather(
 
     @property
     def attribution(self) -> str:
-        parts = [ATTRIBUTION]
-        if name := self._obs.get("station_name"):
-            parts.append(f"觀測 Observation: {name}")
-        parts.append(
-            f"預報 Forecast: {self._location['county']}{self._location['township']}"
-        )
-        return "｜".join(parts)
+        # Attribution is plain text that Home Assistant does not translate, so
+        # follow the system language like the entity names do.
+        station = self._obs.get("station_name")
+        township = f"{self._location['county']}{self._location['township']}"
+        if self.hass.config.language.startswith("zh"):
+            parts = ["資料來源：中央氣象署"]
+            if station:
+                parts.append(f"觀測：{station}測站")
+            parts.append(f"預報：{township}")
+            return "｜".join(parts)
+        parts = ["Data: Central Weather Administration"]
+        if station:
+            parts.append(f"Station: {station}")
+        parts.append(f"Forecast: {township}")
+        return " · ".join(parts)
 
     def _observed_or_forecast(self, key: str):
         value = self._obs.get(key)

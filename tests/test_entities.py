@@ -51,8 +51,10 @@ async def test_weather_entity(hass: HomeAssistant, setup_entry) -> None:
     assert state.attributes["apparent_temperature"] is not None
     assert state.attributes["uv_index"] is not None  # 13:30, a daytime period
     assert state.state in ("sunny", "partlycloudy", "cloudy")
-    assert station["StationName"] in state.attributes["attribution"]
-    assert "桃園市中壢區" in state.attributes["attribution"]
+    assert state.attributes["attribution"] == (
+        f"Data: Central Weather Administration · Station: {station['StationName']}"
+        " · Forecast: 桃園市中壢區"
+    )
 
 
 async def test_forecasts(hass: HomeAssistant, setup_entry) -> None:
@@ -201,6 +203,10 @@ async def test_traditional_chinese_names(hass: HomeAssistant, cwa_api) -> None:
     )
     assert hass.states.get("sensor.taiwan_cwa_home_station").attributes["friendly_name"] == (
         "Home 觀測測站"
+    )
+    station = entry.data[CONF_LOCATION]["stations"][0]["name"]
+    assert hass.states.get(WEATHER).attributes["attribution"] == (
+        f"資料來源：中央氣象署｜觀測：{station}測站｜預報：桃園市中壢區"
     )
 
 

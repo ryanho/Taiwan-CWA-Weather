@@ -28,7 +28,6 @@ FORECAST_SCAN_INTERVAL = timedelta(hours=1)
 # transient API failures.
 FORECAST_VALID = timedelta(hours=12)
 
-ATTRIBUTION = "中央氣象署 Central Weather Administration"
 TIME_ZONE = "Asia/Taipei"
 
 # Township forecast datasets per county: (3-day hourly/3-hourly, 1-week 12-hourly).
